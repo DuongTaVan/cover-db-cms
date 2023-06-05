@@ -2,15 +2,9 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Answer;
-use App\Models\AnswerNew;
-use App\Models\Exam;
 use App\Models\Exercise;
 use App\Models\FlashcardTopic;
-use App\Models\Order;
-use App\Models\Question;
 use App\Models\Result;
-use App\Models\ResultDetail;
 use App\Traits\FileUpdate;
 use Carbon\Carbon;
 use Exception;
@@ -525,23 +519,51 @@ class CommandController extends Controller
     {
         DB::beginTransaction();
         try {
-            $exerciseQuestions = DB::connection('mysql')->table('questions')->where('id_test', '<>', 0)->get()->toArray();
+//            $exerciseQuestions = DB::connection('mysql')->table('questions')->where('id_test', '<>', 0)->get()->toArray();
+            $answers = DB::connection('mysql2')->table('mod_question')
+                ->join('mod_answer', 'mod_answer.QuestionID', 'mod_question.ID')
+                ->select('mod_answer.*')
+                ->get();
             $insertAnswer = [];
-            foreach ($exerciseQuestions as $exerciseQuestion) {
-                $answerItems = DB::connection('mysql2')->table('mod_answer')->where('QuestionID', $exerciseQuestion->id_old)->get()->toArray();
-                foreach ($answerItems as $key => $answerItem) {
-                    $insertAnswer[] = [
-                        'question_id' => $exerciseQuestion->id,
-                        'name' => $answerItem->Name ? str_replace("&nbsp;", '', strip_tags($answerItem->Name)) : '',
-                        'is_correct' => $answerItem->Type > 0 ? 1 : 0,
-                        'order' => $key,
-                        'created_at' => $answerItem->Updated,
-                        'updated_at' => $answerItem->Updated,
-                    ];
-                }
+            foreach ($answers as $key => $answer) {
+                $insertAnswer[] = [
+                    'question_id_old' => $answer->QuestionID,
+                    'question_id' => 1,
+                    'name' => $answer->Name ? str_replace("&nbsp;", '', strip_tags($answer->Name)) : '',
+                    'is_correct' => $answer->Type > 0 ? 1 : 0,
+                    'order' => $key,
+                    'created_at' => $answer->Updated,
+                    'updated_at' => $answer->Updated,
+                ];
             }
             $insertDataAnswer = collect($insertAnswer); // Make a collection to use the chunk method
             $chunks = $insertDataAnswer->chunk(50);
+            foreach ($chunks as $chunk) {
+                DB::connection('mysql')->table('answers')->insert($chunk->toArray());
+            }
+            $insertAnswerNew = [];
+            $answerNews = DB::connection('mysql')->table('questions')
+                ->join('answers', 'questions.id_old_exercise', 'answers.question_id_old')
+                ->where('answers.question_id_old', '<>', 0)
+                ->select('answers.*', 'questions.id as questionIdNew')
+                ->get();
+            //Remove before update.
+            DB::connection('mysql')->table('answers')
+                ->where('question_id_old', '<>', 0)
+                ->delete();
+            foreach ($answerNews as $answerNew) {
+                $insertAnswerNew[] = [
+                    'question_id_old' => 0,
+                    'question_id' => $answerNew->questionIdNew,
+                    'name' => $answerNew->name,
+                    'is_correct' => $answerNew->is_correct,
+                    'order' => $answerNew->order,
+                    'created_at' => $answerNew->created_at,
+                    'updated_at' => $answerNew->updated_at,
+                ];
+            }
+            $insertDataAnswerNew = collect($insertAnswerNew); // Make a collection to use the chunk method
+            $chunks = $insertDataAnswerNew->chunk(50);
             foreach ($chunks as $chunk) {
                 DB::connection('mysql')->table('answers')->insert($chunk->toArray());
             }
@@ -596,11 +618,11 @@ class CommandController extends Controller
             $listComments = [];
             foreach ($olds as $old) {
                 $linkImage = null;
-                if ($old->File) {
+                if ($old->thumbnail) {
                     //Insert file.
                     $data = [
-                        'name' => $old->Code . '-image-intro',
-                        'url' => env('BASE_URL') . $old->File,
+                        'name' => $old->Code . '-avatar',
+                        'url' => env('BASE_URL') . $old->thumbnail,
                         'size' => null,
                         'type' => 0,
                     ];
@@ -763,7 +785,8 @@ class CommandController extends Controller
                                                     //Insert file.
                                                     $data = [
                                                         'name' => $oldVideo->Code . '-video',
-                                                        'url' => env('APP_DOMAIN_VIDEO_M3U8') . $oldVideo->Video,
+//                                                        'url' => env('APP_DOMAIN_VIDEO_M3U8') . $oldVideo->Video,
+                                                        'url' => $oldVideo->Video,
                                                         'size' => null,
                                                         'type' => 4,
                                                     ];
@@ -855,11 +878,21 @@ class CommandController extends Controller
                                                                 ];
                                                                 $file = $this->createFile($data);
                                                             }
+                                                            switch ($oldError->error_type) {
+                                                                case 3:
+                                                                    $type = 1;
+                                                                    break;
+                                                                case 2:
+                                                                    $type = 0;
+                                                                    break;
+                                                                default:
+                                                                    $type = 2;
+                                                            }
                                                             $insertError[] = [
                                                                 'user_id' => $oldError->user_id,
                                                                 'lesson_id' => $z,
                                                                 'image_id' => $file ? $file->id : 0,
-                                                                'type' => $oldError->error_type,
+                                                                'type' => $type,
                                                                 'status' => $oldError->status,
                                                                 'description' => $oldError->desc,
                                                                 'created_at' => $oldError->created,
@@ -1038,9 +1071,19 @@ class CommandController extends Controller
             $inserts = [];
             $insertQuestion = [];
             $groupQuestion = [];
-            $exercises = Exercise::with(['question' => function ($query) {
-                $query->withCount('answer')
-                    ->orderBy('Order', 'ASC');
+            $questionIds = DB::connection('mysql2')->table('mod_question')
+                ->join('mod_answer', 'mod_answer.QuestionID', 'mod_question.ID')
+                ->select('mod_question.ID as questionID', 'mod_question.Name as questionName', 'mod_question.File as questionFile',
+                    'mod_question.Updated as questionUpdated', 'mod_question.Order as questionOrder', 'mod_question.Activity as questionActivity',
+                    'mod_question.TestID as questionTestID', 'mod_question.Type as questionType', 'mod_question.Mp3 as questionMp3',
+                    'mod_question.script as questionScript', 'mod_question.time as questionTime')
+                ->orderBy('questionOrder', 'ASC')
+                ->groupBy('questionID')
+                ->pluck('questionID')
+                ->toArray();
+
+            $exercises = Exercise::with(['question' => function ($query) use ($questionIds) {
+                $query->orderBy('Order', 'ASC');
             }])->get();
             foreach ($exercises as $exercise) {
                 $inserts[] = [
@@ -1057,7 +1100,7 @@ class CommandController extends Controller
                 ];
 
                 foreach ($exercise->question as $key => $question) {
-                    if (!$key && $question->answer_count) {
+                    if (!$key && in_array($question->ID, $questionIds)) {
                         $idGroupQuestionAfter = $idGroupQuestionAfter + 1;
                         $groupQuestion[] = [
                             'exercise_id' => $question->TestID,
@@ -1072,7 +1115,7 @@ class CommandController extends Controller
                             'updated_at' => now(),
                         ];
                     }
-                    if ($question->answer_count) {
+                    if (in_array($question->ID, $questionIds)) {
                         $linkImage = null;
                         if ($question->File) {
                             //Insert file.
@@ -1097,7 +1140,7 @@ class CommandController extends Controller
                         }
 
                         $insertQuestion[] = [
-                            'id_old' => $question->ID,
+                            'id_old_exercise' => $question->ID,
                             'id_test' => $question->TestID ?? 0,
                             'group_question_id' => $idGroupQuestionAfter,
                             'name' => $question->Name,
@@ -1289,9 +1332,15 @@ class CommandController extends Controller
             DB::connection('mysql')->table('examinations')->truncate();
             DB::connection('mysql')->table('examination_topic')->truncate();
             DB::connection('mysql')->table('exam_managements')->truncate();
+            DB::connection('mysql')->table('projects')->truncate();
             $exams = DB::connection('mysql2')->table('mod_exam')->get()->toArray();
-            $examParts = DB::connection('mysql2')->table('mod_exampart')->get()->toArray();
+            $examParts = DB::connection('mysql2')
+                ->table('mod_exampart')
+                ->join('mod_exam', 'mod_exam.ID', '=', 'mod_exampart.ExamID')
+                ->select('mod_exampart.*', 'mod_exam.Type as examType')
+                ->get()->toArray();
             $groupQuestionParents = DB::connection('mysql2')->table('mod_exampart2')->get()->toArray();
+            $projectExams = DB::connection('mysql2')->table('project_exam')->get()->toArray();
             $groupQuestionAfter = DB::connection('mysql')->table('group_questions')->orderBy('id', 'DESC')->first();
             $idGroupQuestionAfter = $groupQuestionAfter ? $groupQuestionAfter->id : 0;
             $insertExam = [];
@@ -1325,15 +1374,154 @@ class CommandController extends Controller
                     'updated_at' => now(),
                 ],
 
+                [
+                    'id' => 4,
+                    'name' => 'Từ vựng',
+                    'description' => null,
+                    'type' => 0,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ],
+                [
+                    'id' => 5,
+                    'name' => 'Chữ hán',
+                    'description' => null,
+                    'type' => 0,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ], [
+                    'id' => 6,
+                    'name' => 'Ngữ pháp',
+                    'description' => null,
+                    'type' => 0,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ], [
+                    'id' => 7,
+                    'name' => 'Từ vựng - Chữ hán',
+                    'description' => null,
+                    'type' => 0,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ],
+                [
+                    'id' => 8,
+                    'name' => 'Từ vựng - Chữ hán - Ngữ pháp',
+                    'description' => null,
+                    'type' => 0,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ],
+                [
+                    'id' => 9,
+                    'name' => 'Ngữ pháp - Đọc hiểu',
+                    'description' => null,
+                    'type' => 0,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ],
+                [
+                    'id' => 10,
+                    'name' => 'Từ vựng - Chữ hán - Ngữ pháp - Đọc hiểu',
+                    'description' => null,
+                    'type' => 0,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ],
+                [
+                    'id' => 11,
+                    'name' => 'Kiến thức ngôn ngữ',
+                    'description' => null,
+                    'type' => 1,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ], [
+                    'id' => 12,
+                    'name' => 'Đọc hiểu',
+                    'description' => null,
+                    'type' => 1,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ], [
+                    'id' => 13,
+                    'name' => 'Nghe hiểu',
+                    'description' => null,
+                    'type' => 1,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ],
+
+            ];
+            $insertProjectExam = [];
+            $insertProject = [
+                [
+                    'id' => 1,
+                    'name' => 'B2B',
+                    'description' => 'B2B',
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ],
+                [
+                    'id' => 2,
+                    'name' => 'Riki Trực Tuyến',
+                    'description' => 'Riki Trực Tuyến',
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ], [
+                    'id' => 3,
+                    'name' => 'Riki Online',
+                    'description' => 'Riki Online',
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ], [
+                    'id' => 4,
+                    'name' => 'Offline',
+                    'description' => 'Offline',
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ], [
+                    'id' => 5,
+                    'name' => 'LETCO',
+                    'description' => 'LETCO',
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ],
+
             ];
 
+            foreach ($projectExams as $projectExam) {
+                $insertProjectExam[] = [
+                    'project_id' => $projectExam->project_id,
+                    'examination_id' => $projectExam->exam_id,
+                ];
+            }
+
             foreach ($exams as $exam) {
+                switch ($exam->LevelID) {
+                    case 1737:
+                        $levelId = 1;
+                        break;
+                    case 1738:
+                        $levelId = 2;
+                        break;
+                    case 1739:
+                        $levelId = 3;
+                        break;
+
+                    case 1740:
+                        $levelId = 4;
+                        break;
+                    default:
+                        $levelId = 5;
+                }
+
+
                 $linkSurvey = null;
                 if ($exam->Survey) {
                     //Insert file.
                     $data = [
                         'name' => Str::slug($exam->Name),
-                        'url' => env('BASE_URL') . '/' . $exam->Survey,
+                        'url' => $exam->Survey,
                         'size' => null,
                         'type' => 6,
                     ];
@@ -1349,8 +1537,8 @@ class CommandController extends Controller
                     'name' => $exam->Name,
                     'status' => 1,
                     'type' => $exam->Type === 2 ? 0 : 1,
-                    'level_id' => 0,
-                    'exam' => 0,
+                    'level_id' => $levelId,
+                    'exam' => 1,
                     'order' => $exam->Order,
                     'created_at' => $exam->Updated,
                     'updated_at' => $exam->Updated,
@@ -1369,10 +1557,54 @@ class CommandController extends Controller
                     ];
                     $linkMp3 = $this->createFile($data);
                 }
+                if ($examPart->examType === 2) {
+                    switch ($examPart->type) {
+                        case 1:
+                            $typeManagement = 4;
+                            break;
+                        case 2:
+                            $typeManagement = 5;
+                            break;
+                        case 3:
+                            $typeManagement = 6;
+                            break;
+
+                        case 4:
+                            $typeManagement = 2;
+                            break;
+                        case 5:
+                            $typeManagement = 3;
+                            break;
+                        case 6:
+                            $typeManagement = 7;
+                            break;
+                        case 7:
+                            $typeManagement = 8;
+                            break;
+
+                        case 8:
+                            $typeManagement = 9;
+                            break;
+
+                        default:
+                            $typeManagement = 10;
+                    }
+                } else {
+                    switch ($examPart->type) {
+                        case 1:
+                            $typeManagement = 1;
+                            break;
+                        case 2:
+                            $typeManagement = 2;
+                            break;
+                        default:
+                            $typeManagement = 3;
+                    }
+                }
                 $insertExamTopic[] = [
                     'id' => $examPart->ID,
                     'examination_id' => $examPart->ExamID,
-                    'exam_management_id' => $examPart->type,
+                    'exam_management_id' => $typeManagement,
                     'title' => $examPart->Name,
                     'time' => $examPart->Time,
                     'break_time' => $examPart->free_time ?? 0,
@@ -1399,6 +1631,7 @@ class CommandController extends Controller
                     'created_at' => $groupQuestionParent->Updated,
                     'updated_at' => $groupQuestionParent->Updated,
                     'id_old' => 0,
+                    'id_old_parent' => $groupQuestionParent->ID,
                 ];
                 $groupChild = $idGroupQuestionAfter;
                 $childs = DB::connection('mysql2')->table('mod_examgroup')->where('ExamPart2ID', $groupQuestionParent->ID)->get()->toArray();
@@ -1430,14 +1663,15 @@ class CommandController extends Controller
                         'id' => $groupChild,
                         'exercise_id' => 0,
                         'examination_topic_id' => $groupQuestionParent->ExamPartID,
-                        'name' => $groupQuestionParent->Name,
+                        'name' => $groupQuestionChildItem->Content,
                         'order' => $idGroupQuestionAfter,
                         'image_id' => $linkImage ? $linkImage->id : 0,
                         'audio_id' => $linkMp3 ? $linkMp3->id : 0,
                         'parent_id' => $idGroupQuestionAfter,
-                        'created_at' => $groupQuestionParent->Updated,
-                        'updated_at' => $groupQuestionParent->Updated,
+                        'created_at' => $groupQuestionChildItem->Created,
+                        'updated_at' => $groupQuestionChildItem->Updated,
                         'id_old' => $groupQuestionChildItem->ID,
+                        'id_old_parent' => 0,
                     ];
                 }
                 $idGroupQuestionAfter = $groupChild;
@@ -1462,6 +1696,19 @@ class CommandController extends Controller
             $chunks = $insertDataGroupQuestion->chunk(50);
             foreach ($chunks as $chunk) {
                 DB::connection('mysql')->table('group_questions')->insert($chunk->toArray());
+            }
+
+            $insertDataProject = collect($insertProject); // Make a collection to use the chunk method
+            $chunks = $insertDataProject->chunk(50);
+            foreach ($chunks as $chunk) {
+                DB::connection('mysql')->table('projects')->insert($chunk->toArray());
+            }
+
+
+            $insertDataProjectExam = collect($insertProjectExam); // Make a collection to use the chunk method
+            $chunks = $insertDataProjectExam->chunk(50);
+            foreach ($chunks as $chunk) {
+                DB::connection('mysql')->table('examination_project')->insert($chunk->toArray());
             }
             DB::commit();
             return redirect()->back()->with('msg', 'Success!');
@@ -1492,61 +1739,19 @@ class CommandController extends Controller
                     'mod_examhistory.StartTime as startTime',
                 )->get();
             $insertResult = [];
-//            $insertResultDetail = [];
-            foreach ($exams as $key => $result) {
-                $id = $key + 1;
-//                if ($result->works) {
-//                    foreach ($result->works as $work) {
-//                        $insertResultDetail[] = [
-//                            'exam_result_id' => $id,
-//                            'answer_id' => $work,
-//                        ];
-//                    }
-//                }
+            foreach ($exams as $result) {
                 $insertResult[] = [
-                    'id' => $id,
                     'ex_id' => $result->mod_exam_id,
                     'user_id' => $result->userId,
                     'point' => $result->result,
-//                    'language_knowledge' => count($parts) > 0 ? ($parts[0]->Result ?? 0) : 0,
-//                    'reading' => count($parts) > 1 ? ($parts[1]->Result ?? 0) : 0,
-//                    'listening' => count($parts) > 2 ? ($parts[2]->Result ?? 0) : 0,
                     'details' => $result->details,
+                    'works' => $result->works,
                     'type' => $result->mod_exam_type === 1 ? 1 : 0,
                     'status' => $result->complete === 1 ? 1 : 0,
                     'created_at' => $result->startTime,
                     'updated_at' => $result->startTime,
                 ];
             }
-//            $insertDataResultDetail = collect($insertResultDetail); // Make a collection to use the chunk method
-//            $chunks = $insertDataResultDetail->chunk(1000);
-//            foreach ($chunks as $chunk) {
-//                $temp = [];
-//                foreach ($chunk as $item) {
-//                    $t = [];
-//                    foreach ($item['answer_id'] as $i) {
-//                        if ($i !== '') {
-//                            $t[] = (int)$i;
-//                        }
-//                    }
-//                    if (count($t)) {
-//                        $answerIds = AnswerNew::whereIn('id_old_exam', $t)->get()->pluck('id')->toArray();
-//                        foreach ($answerIds as $answerId) {
-//                            $temp[] = [
-//                                'answer_id' => $answerId,
-//                                'exam_result_id' => $item['exam_result_id'],
-//                            ];
-//                        }
-//                    }
-//
-//                }
-//                $insertDataResultTemp = collect($temp); // Make a collection to use the chunk method
-//                $chunks = $insertDataResultTemp->chunk(50);
-//                foreach ($chunks as $chunk) {
-//                    DB::connection('mysql')->table('exam_results_detail')->insert($chunk->toArray());
-//                }
-//            }
-
 
             $insertDataResult = collect($insertResult); // Make a collection to use the chunk method
             $chunks = $insertDataResult->chunk(50);
@@ -1576,8 +1781,10 @@ class CommandController extends Controller
     {
         DB::beginTransaction();
         try {
-            $examGroupIds = DB::connection('mysql')->table('group_questions')->where('id_old', '<>', 0)->get()->pluck('id_old')->toArray();
-            $questionAfter = DB::connection('mysql')->table('questions')->orderBy('id', 'DESC')->first();
+            $examGroupIds = DB::connection('mysql')->table('group_questions')
+                ->where('id_old', '<>', 0)->get()->pluck('id_old')->toArray();
+            $questionAfter = DB::connection('mysql')->table('questions')
+                ->orderBy('id', 'DESC')->first();
             $idQuestionAfter = $questionAfter ? $questionAfter->id : 0;
             $insertQuestion = [];
             foreach ($examGroupIds as $examGroupId) {
@@ -1639,14 +1846,17 @@ class CommandController extends Controller
     {
         DB::beginTransaction();
         try {
-            $examQuestions = DB::connection('mysql')->table('questions')->where('id_old', '<>', 0)->get()->toArray();
+            $examQuestions = DB::connection('mysql')->table('questions')
+                ->where('id_old', '<>', 0)->get()->toArray();
             $insertAnswer = [];
             foreach ($examQuestions as $examQuestion) {
-                $answerItems = DB::connection('mysql2')->table('mod_examanswer')->where('ExamQuestionID', $examQuestion->id_old)->get()->toArray();
+                $answerItems = DB::connection('mysql2')
+                    ->table('mod_examanswer')
+                    ->where('ExamQuestionID', $examQuestion->id_old)->get()->toArray();
 
                 foreach ($answerItems as $key => $answerItem) {
                     $insertAnswer[] = [
-                        'id_old_exam' => $answerItem->ID,
+                        'id' => $answerItem->ID,
                         'question_id' => $examQuestion->id,
                         'name' => $answerItem->Name ? str_replace("&nbsp;", '', strip_tags($answerItem->Name)) : '',
                         'is_correct' => $answerItem->Point > 0 ? 1 : 0,
@@ -1680,7 +1890,10 @@ class CommandController extends Controller
                 ->get()->toArray();
             $insertQuestionPivot = [];
             foreach ($examGroupQuestions as $examGroupQuestion) {
-                $questionItems = DB::connection('mysql')->table('questions')->where('group_question_id', $examGroupQuestion->id_old)->get()->toArray();
+                $questionItems = DB::connection('mysql')
+                    ->table('questions')
+                    ->where('group_question_id', $examGroupQuestion->id_old)
+                    ->get()->toArray();
                 foreach ($questionItems as $key => $questionItem) {
                     $point = DB::connection('mysql2')->table('mod_examanswer')
                         ->where('ExamQuestionID', $questionItem->id_old)
@@ -1756,9 +1969,12 @@ class CommandController extends Controller
             DB::connection('mysql')->table('activate_history')->truncate();
             $orders = DB::connection('mysql2')->table('mod_order')
                 ->join('mod_orderdetail', 'mod_orderdetail.OrderID', '=', 'mod_order.ID')
-                ->select('mod_order.ID as orderId', 'mod_order.WebUserID as userId', 'mod_order.ActivityTime as activitytime', 'mod_order.type as type',
-                    'mod_orderdetail.ID as orderDetailId', 'mod_orderdetail.ProductID as productId', 'mod_orderdetail.ActivityTime as orderDetailActivityTime',
-                    'mod_orderdetail.ExpiredTime as orderDetailExpiredTime', 'mod_orderdetail.Period as orderPeriod', 'mod_orderdetail.premium as orderPremium',
+                ->select('mod_order.ID as orderId', 'mod_order.WebUserID as userId',
+                    'mod_order.ActivityTime as activitytime', 'mod_order.type as type',
+                    'mod_orderdetail.ID as orderDetailId', 'mod_orderdetail.ProductID as productId',
+                    'mod_orderdetail.ActivityTime as orderDetailActivityTime',
+                    'mod_orderdetail.ExpiredTime as orderDetailExpiredTime', 'mod_orderdetail.Period as orderPeriod',
+                    'mod_orderdetail.premium as orderPremium',
                 )
                 ->get();
 
@@ -1820,12 +2036,348 @@ class CommandController extends Controller
             $tables = DB::select("SELECT * FROM information_schema.tables WHERE table_schema = '$databaseName'");
             foreach ($tables as $table) {
                 $name = $table->TABLE_NAME;
-                if ($name == 'migrations') {
+                if ($name === 'migrations') {
+                    continue;
+                }
+                if ($name === 'admins') {
+                    continue;
+                }
+                if ($name === 'levels') {
+                    continue;
+                }
+                if ($name === 'settings') {
+                    continue;
+                }
+                if ($name === 'settings') {
                     continue;
                 }
                 DB::table($name)->truncate();
             }
             Schema::enableForeignKeyConstraints();
+            DB::commit();
+            return redirect()->back()->with('msg', 'Success!');
+        } catch (Exception $e) {
+            DB::rollBack();
+            dd($e);
+            return 1;
+        }
+    }
+
+    public function scoreManagement()
+    {
+        DB::beginTransaction();
+        try {
+            DB::connection('mysql')->table('score_managements')->truncate();
+            DB::connection('mysql')->table('score_managements_question_group')->truncate();
+            $points = DB::connection('mysql2')->table('component_points')->get();
+            $temp = [];
+            $insertScore = [];
+            $insertScoreGroup = [];
+            foreach ($points as $point) {
+                $newPoint = json_decode($point->content);
+                foreach ($newPoint as $key => $item) {
+                    $temp[] = [
+                        'exam_id' => $point->id_exam,
+                        'exam_manager_id' => $key,
+                        'group_question' => $item->content,
+                        'slip_point' => $item->not_pass_point,
+                    ];
+                }
+            }
+            foreach ($temp as $key => $item) {
+                $id = $key + 1;
+
+                switch ((int)$item['exam_manager_id']) {
+                    case 1:
+                        $typeManagement = 11;
+                        break;
+                    case 2:
+                        $typeManagement = 12;
+                        break;
+                    default:
+                        $typeManagement = 13;
+                }
+
+
+                $insertScore[] = [
+                    'id' => $id,
+                    'exam_management_id' => $typeManagement,
+                    'examination_id' => $item['exam_id'],
+                    'point_slip' => $item['slip_point'],
+                ];
+                $idGroupQuestions = DB::connection('mysql')
+                    ->table('group_questions')
+                    ->whereIn('id_old_parent', $item['group_question'])->get()->pluck('id');
+                foreach ($idGroupQuestions as $idGroupQuestion) {
+                    $insertScoreGroup[] = [
+                        'score_management_id' => $id,
+                        'question_group_id' => $idGroupQuestion,
+                    ];
+                }
+            }
+            $insertDataScore = collect($insertScore); // Make a collection to use the chunk method
+            $chunks = $insertDataScore->chunk(50);
+            foreach ($chunks as $chunk) {
+                DB::connection('mysql')->table('score_managements')->insert($chunk->toArray());
+            }
+
+            $insertDataScoreGroup = collect($insertScoreGroup); // Make a collection to use the chunk method
+            $chunks = $insertDataScoreGroup->chunk(50);
+            foreach ($chunks as $chunk) {
+                DB::connection('mysql')->table('score_managements_question_group')->insert($chunk->toArray());
+            }
+            DB::commit();
+            return redirect()->back()->with('msg', 'Success!');
+        } catch (Exception $e) {
+            DB::rollBack();
+            dd($e);
+            return 1;
+        }
+    }
+
+    public function removeUser()
+    {
+        DB::beginTransaction();
+        try {
+            $userIDs = DB::connection('mysql2')->table('mod_webuser')
+                ->where('Activity', 0)->get()->pluck('ID')->toArray();
+            DB::connection('mysql2')->table('mod_codecoupon')
+                ->whereIn('WebUserID', $userIDs)->delete();
+            DB::connection('mysql2')->table('video_errors')
+                ->whereIn('user_id', $userIDs)
+                ->delete();
+
+            $videoErrors = DB::connection('mysql2')->table('video_errors')
+                ->selectRaw('* , (SELECT COUNT(*) FROM mod_webuser WHERE mod_webuser.ID = video_errors.user_id) as  countUser')
+                ->get();
+            $idsErr = [];
+            foreach ($videoErrors as $videoError) {
+                if (!$videoError->countUser) {
+                    $idsErr[] = $videoError->id;
+                }
+            }
+            DB::connection('mysql2')->table('video_errors')
+                ->whereIn('id', $idsErr)
+                ->delete();
+
+            $historyExams = DB::connection('mysql2')->table('mod_examhistory')
+                ->selectRaw('* , (SELECT COUNT(*) FROM mod_webuser WHERE mod_webuser.ID = mod_examhistory.UserID) as  countUser')
+                ->get();
+            $idsHistory = [];
+            foreach ($historyExams as $historyExam) {
+                if (!$historyExam->countUser) {
+                    $idsHistory[] = $historyExam->ID;
+                }
+            }
+            DB::connection('mysql2')->table('mod_examhistory')
+                ->whereIn('ID', $idsHistory)
+                ->delete();
+
+            $commentRemoves = DB::connection('mysql2')->table('mod_comment')
+                ->whereIn('UserID', $userIDs)->pluck('ID')->toArray();
+            DB::connection('mysql2')->table('mod_comment')
+                ->whereIn('ParentID', $commentRemoves)
+                ->orWhereIn('ID', $commentRemoves)
+                ->delete();
+            DB::connection('mysql2')->table('mod_contact')
+                ->whereIn('UserID', $commentRemoves)
+                ->orWhereIn('ToUserID', $commentRemoves)
+                ->delete();
+            DB::connection('mysql2')->table('mod_examhistory')
+                ->whereIn('UserID', $commentRemoves)
+                ->delete();
+
+            DB::connection('mysql2')->table('mod_order')
+                ->whereIn('WebUserID', $commentRemoves)
+                ->delete();
+
+            DB::connection('mysql2')->table('mod_orderdetail')
+                ->whereIn('WebUserID', $commentRemoves)
+                ->delete();
+
+            DB::connection('mysql2')->table('mod_webuser')
+                ->where('Activity', 0)
+                ->delete();
+
+            DB::commit();
+            return redirect()->back()->with('msg', 'Success!');
+        } catch (Exception $e) {
+            DB::rollBack();
+            dd($e);
+            return 1;
+        }
+    }
+
+    public function removeFlashcard()
+    {
+        DB::beginTransaction();
+        try {
+            $flashcards = DB::connection('mysql2')->table('flashcards')
+                ->selectRaw('* , (SELECT COUNT(*) AS flascardTopic FROM flashcard_topics WHERE flashcards.topic_id = flashcard_topics.ID) as  countTopic')
+                ->get();
+            $idsFlashcard = [];
+            foreach ($flashcards as $flashcard) {
+                if (!$flashcard->countTopic) {
+                    $idsFlashcard[] = $flashcard->id;
+                }
+            }
+            DB::connection('mysql2')->table('flashcards')->whereIn('id', $idsFlashcard)->delete();
+
+            $topics = DB::connection('mysql2')->table('flashcard_topics')
+                ->selectRaw('* , (SELECT COUNT(*) FROM flashcards WHERE flashcards.topic_id = flashcard_topics.ID) as  countFlashcard')
+                ->get();
+
+            $idsTopic = [];
+            foreach ($topics as $topic) {
+                if (!$topic->countFlashcard) {
+                    $idsTopic[] = $topic->id;
+                }
+            }
+
+            $topics = DB::connection('mysql2')->table('flashcard_topics')
+                ->selectRaw('* , (SELECT COUNT(*) FROM flashcard_categories WHERE flashcard_categories.id = flashcard_topics.category_id) as  countFlashcardCategory')
+                ->get();
+
+            foreach ($topics as $topic) {
+                if (!$topic->countFlashcardCategory) {
+                    $idsTopic[] = $topic->id;
+                }
+            }
+
+            DB::connection('mysql2')->table('flashcard_topics')->whereIn('id', $idsTopic)->delete();
+            $idsCategory = [];
+            $categories = DB::connection('mysql2')->table('flashcard_categories')
+                ->selectRaw('* , (SELECT COUNT(*) FROM flashcard_topics WHERE flashcard_categories.id = flashcard_topics.category_id) as countFlashcardCategory')
+                ->get();
+
+            foreach ($categories as $category) {
+                if (!$category->countFlashcardCategory) {
+                    $idsCategory[] = $category->id;
+                }
+            }
+
+            DB::connection('mysql2')->table('flashcard_categories')->whereIn('id', $idsCategory)->delete();
+
+            DB::commit();
+            return redirect()->back()->with('msg', 'Success!');
+        } catch (Exception $e) {
+            DB::rollBack();
+            dd($e);
+            return 1;
+        }
+    }
+
+    public function removeLesson()
+    {
+        DB::beginTransaction();
+        try {
+            $videos = DB::connection('mysql2')->table('mod_video')
+                ->selectRaw('* , (SELECT COUNT(*) FROM mod_lesson WHERE mod_lesson.id = mod_video.LessonID) as  countLesson')
+                ->get();
+            $idsVideo = [];
+            foreach ($videos as $video) {
+                if (!$video->countLesson) {
+                    $idsVideo[] = $video->id;
+                }
+            }
+            DB::connection('mysql2')->table('mod_video')->whereIn('id', $idsVideo)->delete();
+
+            //Lesson.
+            $parts = DB::connection('mysql2')->table('mod_part')
+                ->selectRaw('* , (SELECT COUNT(*) FROM mod_course WHERE mod_course.id = mod_part.CourseID) as  countCourse')
+                ->get();
+            $idsPart = [];
+            foreach ($parts as $part) {
+                if (!$part->countCourse) {
+                    $idsPart[] = $part->ID;
+                }
+            }
+            $lessonIds = DB::connection('mysql2')->table('mod_lesson')->whereIn('PartID', $idsPart)->pluck('id')->toArray();
+            $videoIds = DB::connection('mysql2')->table('mod_video')->whereIn('LessonID', $lessonIds)->pluck('id')->toArray();
+            DB::connection('mysql2')->table('mod_lesson')->whereIn('id', $lessonIds)->delete();
+            DB::connection('mysql2')->table('mod_video')->whereIn('id', $videoIds)->delete();
+            DB::connection('mysql2')->table('mod_part')->whereIn('id', $idsPart)->delete();
+            DB::commit();
+            return redirect()->back()->with('msg', 'Success!');
+        } catch (Exception $e) {
+            DB::rollBack();
+            dd($e);
+            return 1;
+        }
+    }
+
+    public function removeExercise()
+    {
+        DB::beginTransaction();
+        try {
+            $questions = DB::connection('mysql2')->table('mod_question')
+                ->selectRaw('* , (SELECT COUNT(*) FROM mod_test WHERE mod_test.id = mod_question.TestID) as  countExercise')
+                ->get();
+            $idsQuestion = [];
+            foreach ($questions as $question) {
+                if (!$question->countExercise) {
+                    $idsQuestion[] = $question->ID;
+                }
+            }
+
+            $answers = DB::connection('mysql2')->table('mod_answer')
+                ->selectRaw('* , (SELECT COUNT(*) FROM mod_question WHERE mod_question.ID = mod_answer.QuestionID) as  countQuestions')
+                ->get();
+            $idsAnswer = [];
+            foreach ($answers as $answer) {
+                if (!$answer->countQuestions) {
+                    $idsAnswer[] = $answer->ID;
+                }
+            }
+
+            DB::connection('mysql2')->table('mod_question')->whereIn('ID', $idsQuestion)->delete();
+            DB::connection('mysql2')->table('mod_answer')->whereIn('QuestionID', $idsQuestion)->delete();
+            DB::connection('mysql2')->table('mod_answer')->whereIn('ID', $idsAnswer)->delete();
+            DB::commit();
+            return redirect()->back()->with('msg', 'Success!');
+        } catch (Exception $e) {
+            DB::rollBack();
+            dd($e);
+            return 1;
+        }
+    }
+
+    public function removeExam()
+    {
+        DB::beginTransaction();
+        try {
+            $historyExams = DB::connection('mysql2')->table('mod_examhistory')
+                ->selectRaw('* , (SELECT COUNT(*) FROM mod_exam WHERE mod_exam.ID = mod_examhistory.ExamID) as  countUser')
+                ->get();
+            $idsHistory = [];
+            foreach ($historyExams as $historyExam) {
+                if (!$historyExam->countUser) {
+                    $idsHistory[] = $historyExam->ID;
+                }
+            }
+            DB::connection('mysql2')->table('mod_examhistory')
+                ->whereIn('ID', $idsHistory)
+                ->delete();
+
+            $parts = DB::connection('mysql2')->table('mod_exampart')
+                ->selectRaw('* , (SELECT COUNT(*) FROM mod_exam WHERE mod_exampart.ExamID = mod_exam.id) as  countExam')
+                ->get();
+            $idsPart = [];
+            foreach ($parts as $part) {
+                if (!$part->countExam) {
+                    $idsPart[] = $part->ID;
+                }
+            }
+            $idsPart2 = DB::connection('mysql2')->table('mod_exampart2')->whereIn('ExamPartID', $idsPart)->get()->pluck('ID')->toArray();
+            $idsGroup = DB::connection('mysql2')->table('mod_examgroup')->whereIn('ExamPart2ID', $idsPart2)->get()->pluck('ID')->toArray();
+            $idsQuestion = DB::connection('mysql2')->table('mod_examquestion')->whereIn('ExamGroupID', $idsGroup)->get()->pluck('ID')->toArray();
+            $idsAnswer = DB::connection('mysql2')->table('mod_examanswer')->whereIn('ExamQuestionID', $idsQuestion)->get()->pluck('ID')->toArray();
+            DB::connection('mysql2')->table('mod_exampart')->whereIn('ID', $idsPart)->delete();
+            DB::connection('mysql2')->table('mod_exampart2')->whereIn('ID', $idsPart2)->delete();
+            DB::connection('mysql2')->table('mod_examgroup')->whereIn('ID', $idsGroup)->delete();
+            DB::connection('mysql2')->table('mod_examquestion')->whereIn('ID', $idsQuestion)->delete();
+            DB::connection('mysql2')->table('mod_examanswer')->whereIn('ID', $idsAnswer)->delete();
+
             DB::commit();
             return redirect()->back()->with('msg', 'Success!');
         } catch (Exception $e) {

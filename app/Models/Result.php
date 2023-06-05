@@ -12,15 +12,6 @@ class Result extends Model
     protected $connection = 'mysql2';
     protected $table = 'mod_examhistory';
 
-    /**
-     * The attributes that should be cast to native types.
-     *
-     * @var array
-     */
-    protected $casts = [
-        'works' => 'array',
-    ];
-
     public function exam()
     {
         return $this->hasOne(Exam::class, 'ID', 'ExamID');

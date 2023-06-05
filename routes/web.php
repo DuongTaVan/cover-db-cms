@@ -47,3 +47,9 @@ Route::get('/group-question-pivot', [CommandController::class, 'groupQuestionPiv
 Route::get('/group-question-pivot-exercise', [CommandController::class, 'groupQuestionPivotExercise'])->name('group_question_pivot_exercise');
 Route::get('/activate', [CommandController::class, 'activate'])->name('activate');
 Route::get('/truncate-all', [CommandController::class, 'truncateAll'])->name('truncate_all');
+Route::get('/score-management', [CommandController::class, 'scoreManagement'])->name('score_management');
+Route::get('/remove-user', [CommandController::class, 'removeUser'])->name('remove_user');
+Route::get('/remove-flashcard', [CommandController::class, 'removeFlashcard'])->name('remove_flashcard');
+Route::get('/remove-lesson', [CommandController::class, 'removeLesson'])->name('remove_lesson');
+Route::get('/remove-exercise', [CommandController::class, 'removeExercise'])->name('remove_exercise');
+Route::get('/remove-exam', [CommandController::class, 'removeExam'])->name('remove_exam');

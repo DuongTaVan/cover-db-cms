@@ -45,13 +45,22 @@
         </div>
 
         <div class="list service">
+            <div>Delete trash data</div>
+            <a href="{{route('remove_user')}}" class="btn btn-warning">User</a>
+            <a href="{{route('remove_flashcard')}}" class="btn btn-warning">Flashcard</a>
+            <a href="{{route('remove_lesson')}}" class="btn btn-warning">Remove lesson</a>
+            <a href="{{route('remove_exercise')}}" class="btn btn-warning">Remove exercise & question answer</a>
+            <a href="{{route('remove_exam')}}" class="btn btn-warning">Remove exam</a>
+        </div>
+
+        <div class="list service">
             <div>Service</div>
             <a href="{{route('banner')}}" class="btn btn-success">Banners</a>
             <a href="{{route('enterprise')}}" class="btn btn-success">Business partners</a>
             <a href="{{route('contact')}}" class="btn btn-success">Consultancies</a>
             <a href="{{route('popup')}}" class="btn btn-success">Popup</a>
             <a href="{{route('guide')}}" class="btn btn-success">Guide</a>
-{{--            <a href="{{route('admin')}}" class="btn btn-success">Admin</a>--}}
+            {{--            <a href="{{route('admin')}}" class="btn btn-success">Admin</a>--}}
             <a href="{{route('user')}}" class="btn btn-success">User</a>
             <a href="{{route('notifications_app')}}" class="btn btn-success">Notifications app</a>
 
@@ -74,6 +83,7 @@
             <a href="{{route('answer_exam')}}" class="btn btn-success">Answer exam</a>
             <a href="{{route('group_question_pivot')}}" class="btn btn-success">Group Question Pivot Exam</a>
             <a href="{{route('result_exam')}}" class="btn btn-success">Result exam</a>
+            <a href="{{route('score_management')}}" class="btn btn-success">Score management</a>
         </div>
 
         <div class="list exercise-and-lesson">
